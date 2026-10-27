@@ -1,0 +1,14 @@
+# 桌面端 + 核心
+pycryptodome>=3.20
+mutagen>=1.47
+
+# 桌面 GUI
+PyQt6>=6.6
+
+# Android 端（桌面跑逻辑测试时需要）
+kivy==2.3.1
+
+# 测试与打包
+pytest>=8
+pyinstaller>=6.0
+fonttools>=4.0

@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+build/pyi/
+build/*.log
+dist/
+*.spec.bak
+tests/_tmp/
+*.part
+android/bin/
+android/.buildozer/
+android/ncmdump/
+.kivy/

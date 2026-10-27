@@ -1,0 +1,48 @@
+name: build-apk
+
+# Buildozer 只能在 Linux 上跑，这里用 GitHub 的 Ubuntu runner 打包 APK。
+# 手动触发：Actions → build-apk → Run workflow
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+jobs:
+  apk:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 系统依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git zip unzip openjdk-17-jdk autoconf libtool pkg-config \
+            zlib1g-dev libncurses-dev libffi-dev libssl-dev
+
+      - name: 缓存 buildozer
+        uses: actions/cache@v4
+        with:
+          path: ~/.buildozer
+          key: buildozer-${{ hashFiles('android/buildozer.spec') }}
+
+      - name: 安装 buildozer
+        run: |
+          python -m pip install --upgrade pip
+          pip install buildozer cython==0.29.36
+
+      - name: 打包 debug APK
+        # 走 build.sh：它会把项目根的 ncmdump/ 同步进 android/，
+        # 直接 buildozer 打出来的 APK 缺核心，装上手机会 ImportError
+        run: bash android/build.sh debug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ncm-studio-apk
+          path: android/bin/*.apk
+          if-no-files-found: error
