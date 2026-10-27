@@ -1,4 +1,3 @@
-```markdown
 # NCM Studio 2.0
 
 网易云音乐 `.ncm` 转换器，重写自 Nzix 的 `NCM_Tool_v1.0.0`。
@@ -156,3 +155,5 @@ python -m pytest tests -q
 除明确标注来自第三方的代码外，本项目新增的 GUI、Android 封装、构建脚本、文档与工具代码采用 **MIT License**。
 
 `ncmdump/core.py` 中来源于 Nzix / NCM_Tool 的算法与实现思路，版权归原作者所有。若原项目另有明确许可证，则相关部分优先遵循原项目许可证。
+
+完整协议见仓库中的 [`LICENSE`](LICENSE)。
