@@ -1,99 +1,158 @@
+```markdown
 # NCM Studio 2.0
 
-网易云音乐 `.ncm` 转换器，重写自 `NCM_Tool_v1.0.0.exe`。桌面端 PyQt6，Android 端 Kivy，
-转换核心是一份独立的纯 Python 库（`ncmdump`），两端共用。
+网易云音乐 `.ncm` 转换器，重写自 Nzix 的 `NCM_Tool_v1.0.0`。
+
+桌面端使用 PyQt6，Android 端使用 Kivy，转换核心 `ncmdump` 是一份独立的纯 Python 库，两端共用。
+
+项目地址：<https://github.com/doctorcola001/NCM_Studio>
+
+> 本项目为个人自用工具，在原项目基础上重写和扩展。
+> 感谢原作者的分享，具体署名与原项目许可说明见文末「致谢」和「开源协议」。
 
 ## 现在是什么状态
 
 | 部分 | 状态 |
 |---|---|
-| 转换核心 `ncmdump/core.py` | 完成，54 项测试全绿，与出厂字节码对拍一致 |
+| 转换核心 `ncmdump/core.py` | 完成，54 项自动测试全绿，并已用真实 `.ncm` 文件人工回归 |
 | 桌面端 `desktop/app.py` | 完成，GUI 与 `--cli` 均实测可用 |
-| Windows 包 | 已构建：`dist/NCM_Studio.exe`（39.5 MB，单文件，无控制台） |
-| Android 端 `android/main.py` | 代码完成，逻辑在桌面上跑通 |
-| Android APK | **未构建**。Buildozer 需要 Linux，本机 WSL 被安全策略拦截，见 `android/BUILD.md` |
+| Windows 包 | 已构建：`dist/NCM_Studio.exe`（单文件、无控制台） |
+| Android 端 `android/main.py` | 代码完成，Buildozer / GitHub Actions 构建链已配置 |
+| 实际使用验证 | 人工批量转换无异常，封面与元数据正常保留，速度很快 |
+
+## 功能特点
+
+- 支持网易云音乐 `.ncm` 转 `.mp3` / `.flac`
+- 保留歌曲元数据与封面
+- 流式解密，1 MiB 分块处理，大文件不一次性读入内存
+- 桌面端和 Android 端共用同一份转换核心
+- 桌面端支持 GUI 拖放和 `--cli` 批量模式
+- Android 端默认输出到 `Music/NCM Studio`，失败时回退到应用私有目录
+- 自动嗅探解密后的音频格式，不依赖元数据中的 `format` 字段
+- 单文件状态与失败原因可见，不静默吞异常
 
 ## 快速开始
 
 ```bash
-# 依赖（venv 按家规放 hermestools）
-D:/FORDS/hermestools/venvs/ncm-py313/Scripts/python.exe -m pip install -r requirements.txt
+# 安装依赖
+python -m pip install -r requirements.txt
 
 # 桌面 GUI
 python desktop/app.py
 
-# 批量（无界面）
-python desktop/app.py --cli D:/music -o D:/out --overwrite
+# 批量转换（无界面）
+python desktop/app.py --cli /path/to/music -o /path/to/out --overwrite
 
 # 测试
 python -m pytest tests -q
 ```
 
-打包：
+## 打包
+
+### Windows
 
 ```bash
 pyinstaller build/ncm_studio.spec --noconfirm
 ```
 
-## 目录
+产物在 `dist/NCM_Studio.exe`。
 
+### Android APK
+
+推荐使用 GitHub Actions，无需本地配置 Android SDK / NDK：
+
+1. 打开仓库的 Actions 页面
+2. 选择 `build-apk`
+3. 点击 `Run workflow`
+4. 构建完成后下载 Artifact：`ncm-studio-apk`
+
+本地 Linux 构建：
+
+```bash
+bash android/build.sh debug
 ```
+
+产物在 `android/bin/`。
+
+注意：不要直接运行 `buildozer android debug`，必须走 `android/build.sh`，否则 `ncmdump/` 不会被打进 APK。
+
+## 目录结构
+
+```text
 ncmdump/core.py        转换核心（流式解密、元数据、标签、异常分类）
-desktop/app.py         桌面端（GUI + --cli）
-android/main.py        Android 端（Kivy，含权限与输出目录处理）
-android/fonts/         思源黑体 GB2312 子集（Kivy 默认字体没有中文）
-android/buildozer.spec 打包配置
-android/BUILD.md       APK 构建的两条路径
-tools/ncm_encode.py    NCM 封装器（造测试样本）
-tools/ref_dump310.py   用便携 3.10 执行出厂字节码，做参照实现
-tests/                 54 项测试
+desktop/app.py         桌面端（PyQt6 GUI + --cli）
+android/main.py        Android 端（Kivy）
+android/fonts/         内置中文字体
+android/buildozer.spec Android 打包配置
+android/build.sh       Android 构建入口，会先同步核心
+tools/ncm_encode.py    NCM 封装器，用于生成测试样本
+tools/ref_dump310.py   用 Python 3.10 执行出厂字节码作为参照实现
+tests/                 自动测试
 build/ncm_studio.spec  PyInstaller 配置
+.github/workflows/     GitHub Actions 自动构建 APK
 ```
 
-## 怎么验证的（这段是关键）
+## 验证情况
 
-本机**没有任何真实 `.ncm` 样本**，也没法直接相信"看起来能跑"。所以做了两层验证：
+### 1. 自动测试
 
-**第一层：往返。** `tools/ncm_encode.py` 把真实 mp3/flac 封成 NCM，再解回来逐字节比对。
-问题在于这一层是**循环的**——编码器和解码器用同一套 keystream，算法错了两边会互相抵消，
-测试照样绿。
-
-**第二层：对拍。** 真正的证据是拿**出厂实现**当参照。原 exe 里打包的是 Python 3.10 字节码
-（`NCM_Tool_v1.0.0_extracted/PYZ-00.pyz/ncmdump/core.pyc`，7943 字节），3.13 加载不了，
-反编译也失败（交接包里的"反编译源码"其实是空壳，只有 4 行注释头，`gui_dis` 是 0 字节）。
-于是下了个便携版 Python 3.10，直接把那份原始字节码跑起来，与重构实现输出逐字节对比：
-
-```
-tests/test_core.py::test_matches_shipped_implementation  (5 个用例，mp3/flac/长文件/带封面)
+```bash
+python -m pytest tests -q
 ```
 
-同一份 NCM，出厂实现和重构实现解出的音频**完全一致**，且都等于原始音频。
-这同时说明：编码器产出的 NCM 结构是真实的（出厂解码器认），重构的解码器行为与出厂等价。
+覆盖内容包括：
 
-覆盖的边界：跨 1 MiB 分块的 keystream 续接、非 256 对齐的尾块、无元数据区的格式嗅探、
-文件截断、损坏头部、写入中途失败后的临时文件清理、跳过/覆盖语义、文件名非法字符。
+- NCM 往返转换
+- 跨 1 MiB 分块的 keystream 续接
+- 非 256 对齐的尾块
+- 无元数据时的格式嗅探
+- 文件截断、损坏头部
+- 写入失败后的临时文件清理
+- 跳过 / 覆盖语义
+- 文件名非法字符
+- 标签与封面写入
+- Android 端路径与权限逻辑
 
-## 相比交接版修掉的问题
+### 2. 与出厂实现逐字节对拍
 
-交接版（codex 版）代码能跑，但在真机上和实际使用中会翻车，逐条列：
+测试会将重构实现与 `NCM_Tool_v1.0.0` 中的原始字节码进行输出对比，确认同一份 NCM 解出的音频完全一致。
 
-| 问题 | 后果 | 现在 |
-|---|---|---|
-| `self.list.dropEvent = self.drop` 给实例挂属性 | Qt 的事件分发走类型虚函数，实例属性不会被调用，**拖放完全不生效** | 子类化 `DropTree`，重写 `dragEnterEvent/dropEvent` |
-| 进度条只在全部结束时 `setValue` | 长任务看着像卡死 | `dump()` 支持逐字节回调，双进度条（总进度 + 当前文件） |
-| 无元数据时按 `>16MB` 猜格式 | 小体积 FLAC 被存成 `.mp3`，播放器打不开 | 解密后嗅探文件头（`fLaC` / `ID3` / MPEG 同步字） |
-| `f.read()` 一次读全曲 | 大文件/低内存设备直接爆 | 1 MiB 分块流式解密 |
-| 输出写回源目录 | Android 上源目录常只读，**必然 Permission denied** | 默认写 `Music/NCM Studio`，失败退回应用私有目录 |
-| `except: pass` 吞掉异常 | 转换失败静默消失，用户不知道哪些没成 | 逐文件状态 + 失败原因 |
-| Kivy 默认字体 | 中文界面全是方框 | 内置思源黑体（GB2312 子集，3.8 MB） |
-| 标签写入失败即整首算失败 | 一首歌标签异常，音频白转 | 标签/封面失败只记警告，音频主体保留 |
-| mp3 用 vorbis 风格键名写标签 | `audio['title']` 在 mp3 上是 KeyError，标签根本没写进去 | mp3 走 `TIT2/TALB/TPE1` 帧，flac 走 Vorbis Comment |
+### 3. 真实文件人工验证
+
+除自动测试外，已使用真实 `.ncm` 文件进行人工批量测试：
+
+- 转换结果正常，无失败文件
+- 封面完整保留
+- 元数据正常写入
+- 转换速度很快，日常批量使用无压力
 
 ## 已知限制
 
-1. **没有真实样本**。逻辑再严，也建议先拿几首真歌跑一遍确认。
-2. **APK 未构建**。构建路径和坑已写进 `android/BUILD.md`，需要 Linux 环境或 GitHub Actions。
-3. **只支持 mp3 / flac**。遇到 Ogg/RIFF 容器会明确报错，不会产出坏文件。
-4. **元数据里的 22 字节标识符**（`163 key(Don't modify):`）按原版行为写进 comment，
-   没有丢弃，保持与 v1 输出一致。
-5. 原 `NCM_Tool_v1.0.0.exe` 未做任何修改，仍留在桌面。
+1. 仅支持 mp3 / flac；遇到 Ogg、RIFF 等容器会明确报错。
+2. 元数据中的 22 字节标识符 `163 key(Don't modify):` 按原版行为保留。
+3. `--cli` 模式目前为串行处理，没有并发。
+4. Release APK 签名未提交到仓库，正式分发前需要自行配置 keystore。
+5. Android 端仍建议在目标真机上验证存储权限、批量转换内存占用和耗时。
+
+## 致谢
+
+本项目的 NCM 解密算法、格式信息和部分实现思路来自 **Nzix** 的开源项目 **NCM_Tool / NCM_Tool_v1.0.0**。
+
+原项目以开源方式发布，本项目是在其基础上的重写与扩展。由于本项目最初属于个人自用开发，事先未联系原作者，在此向 Nzix 表示感谢。
+
+如果原作者对署名、许可方式或代码使用有任何异议，请联系我，我会立即调整署名、许可证或移除相关代码。
+
+感谢所有开源工具与依赖的贡献者，包括但不限于：
+
+- [Kivy](https://kivy.org/)
+- [PyQt6](https://www.riverbankcomputing.com/software/pyqt/)
+- [pycryptodome](https://www.pycryptodome.org/)
+- [mutagen](https://mutagen.readthedocs.io/)
+- [Buildozer](https://buildozer.readthedocs.io/)
+- [python-for-android](https://python-for-android.readthedocs.io/)
+
+## 开源协议
+
+除明确标注来自第三方的代码外，本项目新增的 GUI、Android 封装、构建脚本、文档与工具代码采用 **MIT License**。
+
+`ncmdump/core.py` 中来源于 Nzix / NCM_Tool 的算法与实现思路，版权归原作者所有。若原项目另有明确许可证，则相关部分优先遵循原项目许可证。
