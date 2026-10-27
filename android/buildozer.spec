@@ -29,3 +29,7 @@ android.release_artifact = aab
 [buildozer]
 log_level = 2
 warn_on_root = 1
+
+# 固定 python-for-android 版本，避免 master 默认使用 Python 3.14
+# v2024.01.21 使用 Python 3.11.5，兼容当前 NDK 25b 与依赖轮子
+p4a.branch = v2024.01.21

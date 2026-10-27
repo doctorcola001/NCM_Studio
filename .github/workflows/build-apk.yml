@@ -34,7 +34,7 @@ jobs:
       - name: 安装 buildozer
         run: |
           python -m pip install --upgrade pip
-          pip install buildozer cython==0.29.36
+          pip install buildozer==1.5.0 cython==0.29.36
 
       - name: 打包 debug APK
         # 走 build.sh：它会把项目根的 ncmdump/ 同步进 android/，

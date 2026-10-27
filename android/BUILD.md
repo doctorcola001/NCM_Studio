@@ -32,10 +32,15 @@ sudo apt install -y git zip unzip openjdk-17-jdk python3-pip python3-venv \
 
 python3 -m venv ~/.venvs/bz
 source ~/.venvs/bz/bin/activate
-pip install buildozer cython==0.29.36
+pip install buildozer==1.5.0 cython==0.29.36
 ```
 
 首次构建会下载 Android SDK/NDK，约 4~6 GB、15~25 分钟。
+
+`buildozer.spec` 中已固定 `p4a.branch = v2024.01.21`（Python 3.11.5）。
+不要随意改回 master，否则 python-for-android 可能默认使用 Python 3.14，
+导致 `pycryptodome` / `charset_normalizer` 等依赖没有 Android 轮子而构建失败。
+
 默认缓存在 `~/.buildozer`；想换盘就 `export BUILDOZER_HOME=/data/buildozer`。
 
 ## 用 Docker（不想在本机配环境时）
