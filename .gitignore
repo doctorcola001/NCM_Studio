@@ -11,3 +11,5 @@ android/bin/
 android/.buildozer/
 android/ncmdump/
 .kivy/
+.venv/
+.tmp/

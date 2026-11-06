@@ -35,6 +35,8 @@ source ~/.venvs/bz/bin/activate
 pip install buildozer==1.5.0 cython==0.29.36
 ```
 
+`android/build.sh` can infer the Buildozer virtualenv when its `bin` is on `PATH` but `VIRTUAL_ENV` is unset. It prefers the system JDK 17 at `/usr/lib/jvm/java-17-openjdk-amd64` when present; set `JAVA17_HOME` to select another JDK 17 installation. Android Studio's bundled JBR may be newer than this project's Gradle wrapper supports.
+
 首次构建会下载 Android SDK/NDK，约 4~6 GB、15~25 分钟。
 
 `buildozer.spec` 中已固定 `p4a.branch = v2024.01.21`（Python 3.11.5）。
@@ -56,11 +58,6 @@ docker run --rm \
   kivy/buildozer bash android/build.sh
 ```
 
-## 用 GitHub Actions
-
-仓库带 `.github/workflows/build-apk.yml`，推到 GitHub 手动触发，
-APK 作为 artifact 下载。workflow 调的也是 `build.sh`，不会有核心缺失问题。
-
 ## 构建时的坑（已在 spec 里处理）
 
 | 坑 | 处理 |
@@ -68,18 +65,16 @@ APK 作为 artifact 下载。workflow 调的也是 `build.sh`，不会有核心�
 | 核心没进包，运行即 ImportError | `build.sh` 先同步 `ncmdump/` 进 `android/` |
 | `pycryptodome` 需要 native 编译 | 用 python-for-android 官方 recipe，写进 requirements 即可 |
 | Kivy 默认字体没有中文，界面全是方框 | 内置思源黑体（GB2312 子集，约 1.9 MB/个），启动时顶掉 Roboto |
-| Android 11+ 分区存储，写回源目录 Permission denied | 输出默认写 `Music/NCM Studio`，失败退回应用私有目录 |
-| API 33 读音频需要新权限 | `READ_MEDIA_AUDIO` + 旧版权限都声明 |
+| Android 11+ 分区存储，无法列出 Download 中的 `.ncm` | 用系统文档选择器导入，应用只读取用户选中的文件 |
+| Android 10+ 不能直接创建公共音乐目录文件 | 通过 MediaStore 导出到 `Music/NCM Studio`，无需媒体读取权限 |
+| Android 9 及更早版本写公共音乐目录 | 运行时请求旧版读写存储权限 |
 | 只打 arm64 会漏掉老设备 | `arm64-v8a,armeabi-v7a` 双架构 |
 | 新版 cython 3 与 buildozer 不兼容 | 固定 `cython==0.29.36` |
 
-## 真机上必须验的三件事
+## 设备验证
 
-逻辑层面已覆盖（`tests/test_android_logic.py` 11 项），但这三点只有设备能确认：
-
-1. 首次启动的权限弹窗；**故意拒绝**，看是否回退到私有目录而不是崩
-2. `/storage/emulated/0/Music/NCM Studio` 是否可写
-3. 100 首以上批量转换时的内存与耗时
+本机 Android 模拟器验证应用启动、系统文件选择器导入 `.ncm`、转换和写入
+`Music/NCM Studio`。真机的大批量转换耗时仍需按目标设备另行评估。
 
 ## Release 签名
 

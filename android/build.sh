@@ -20,6 +20,28 @@ if ! command -v buildozer >/dev/null 2>&1; then
     exit 1
 fi
 
+# If buildozer is on PATH from a venv but VIRTUAL_ENV was not exported,
+# python-for-android may incorrectly try a --user install inside that venv.
+if [[ -z "${VIRTUAL_ENV:-}" ]]; then
+    BUILDOZER_BIN="$(command -v buildozer)"
+    case "$BUILDOZER_BIN" in
+        */bin/buildozer)
+            BUILDOZER_ENV="${BUILDOZER_BIN%/bin/buildozer}"
+            if [[ -f "$BUILDOZER_ENV/pyvenv.cfg" ]]; then
+                export VIRTUAL_ENV="$BUILDOZER_ENV"
+            fi
+            ;;
+    esac
+fi
+
+# The generated Gradle wrapper targets a JDK 17 era toolchain. Android Studio's
+# bundled JBR can be much newer, so prefer the distro JDK 17 when it is present.
+JAVA17_HOME="${JAVA17_HOME:-/usr/lib/jvm/java-17-openjdk-amd64}"
+if [[ -x "$JAVA17_HOME/bin/javac" ]]; then
+    export JAVA_HOME="$JAVA17_HOME"
+    export PATH="$JAVA_HOME/bin:$PATH"
+fi
+
 echo "==> 同步核心到 android/ncmdump（构建产物，勿手改）"
 rm -rf ncmdump
 cp -r ../ncmdump ./ncmdump

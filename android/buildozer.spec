@@ -11,13 +11,14 @@ source.exclude_dirs = tests,build,__pycache__,.venv
 source.exclude_patterns = tests/data/*,*.ncm,*.part
 
 # pycryptodome 走 python-for-android 官方 recipe；mutagen 是纯 Python
-requirements = python3,kivy==2.3.1,pycryptodome,mutagen
+requirements = python3,kivy==2.3.1,pycryptodome,mutagen,filetype
 
 orientation = portrait
 fullscreen = 0
 
-# Android 11+ 分区存储：读音频需要 READ_MEDIA_AUDIO（33+）或 READ_EXTERNAL_STORAGE（<=32）
-android.permissions = READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE,READ_MEDIA_AUDIO
+# SAF lets users select inputs; scoped-storage MediaStore publishes outputs.
+# Legacy permissions are requested only on Android 9 and older.
+android.permissions = READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE
 android.api = 33
 android.minapi = 24
 android.ndk = 25b
@@ -26,10 +27,11 @@ android.allow_backup = True
 android.accept_sdk_license = True
 android.release_artifact = aab
 
+# 固定 python-for-android 版本，避免 master 默认使用 Python 3.14
+# v2024.01.21 使用 Python 3.11.5，兼容当前 NDK 25b 与依赖轮子
+# 注意：buildozer 只从 [app] 段读 p4a.branch，写进 [buildozer] 段会被静默忽略
+p4a.branch = v2024.01.21
+
 [buildozer]
 log_level = 2
 warn_on_root = 1
-
-# 固定 python-for-android 版本，避免 master 默认使用 Python 3.14
-# v2024.01.21 使用 Python 3.11.5，兼容当前 NDK 25b 与依赖轮子
-p4a.branch = v2024.01.21

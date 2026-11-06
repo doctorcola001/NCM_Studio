@@ -16,9 +16,12 @@ buildozer 需要 Linux 环境，见 README。
 from __future__ import annotations
 
 import os
+import shutil
+import tempfile
 import threading
 from pathlib import Path
 from threading import Thread
+from uuid import uuid4
 
 from kivy.app import App
 from kivy.clock import Clock
@@ -100,17 +103,107 @@ def start_dir() -> str:
 
 
 def request_storage_permissions() -> None:
-    """申请存储权限。权限被拒不会崩，只是拿不到外部目录。"""
+    """旧版 Android 写公共音乐目录需要传统存储权限。"""
     if not IS_ANDROID:
         return
     try:
+        from jnius import autoclass
+        if int(autoclass('android.os.Build$VERSION').SDK_INT) >= 29:
+            return
         from android.permissions import Permission, request_permissions
-        perms = [Permission.READ_EXTERNAL_STORAGE, Permission.WRITE_EXTERNAL_STORAGE]
-        if hasattr(Permission, 'READ_MEDIA_AUDIO'):
-            perms.append(Permission.READ_MEDIA_AUDIO)
-        request_permissions(perms)
+        request_permissions([Permission.READ_EXTERNAL_STORAGE,
+                             Permission.WRITE_EXTERNAL_STORAGE])
     except Exception:
         pass
+
+
+def _android_sdk() -> int:
+    from jnius import autoclass
+    return int(autoclass('android.os.Build$VERSION').SDK_INT)
+
+
+def _uri_display_name(resolver, uri) -> str:
+    cursor = resolver.query(uri, None, None, None, None)
+    if cursor is None:
+        return ''
+    try:
+        if not cursor.moveToFirst():
+            return ''
+        column = cursor.getColumnIndex('_display_name')
+        if column < 0:
+            column = cursor.getColumnIndex('display_name')
+        return str(cursor.getString(column)) if column >= 0 else ''
+    finally:
+        cursor.close()
+
+
+def _open_content_uri_fd(resolver, uri) -> int:
+    """Open a SAF-granted URI and return a duplicated OS file descriptor."""
+    descriptor = resolver.openFileDescriptor(uri, 'r')
+    if descriptor is None:
+        raise OSError('无法打开所选文件')
+    fd = os.dup(int(descriptor.getFd()))
+    descriptor.close()
+    return fd
+
+
+def _publish_media_store(local_file: Path, skip: bool) -> tuple[str, bool]:
+    """Publish converted audio under Music/NCM Studio using scoped storage."""
+    from jnius import autoclass
+
+    Media = autoclass('android.provider.MediaStore$Audio$Media')
+    ContentValues = autoclass('android.content.ContentValues')
+    ContentUris = autoclass('android.content.ContentUris')
+    Integer = autoclass('java.lang.Integer')
+    PythonActivity = autoclass('org.kivy.android.PythonActivity')
+    resolver = PythonActivity.mActivity.getContentResolver()
+    collection = Media.EXTERNAL_CONTENT_URI
+    display_name = local_file.name
+    relative_path = 'Music/NCM Studio/'
+
+    cursor = resolver.query(collection, None,
+                            '_display_name=? AND relative_path=?',
+                            [display_name, relative_path], None)
+    previous = []
+    if cursor is not None:
+        try:
+            id_column = cursor.getColumnIndex('_id')
+            while cursor.moveToNext():
+                if id_column >= 0:
+                    previous.append(ContentUris.withAppendedId(
+                        collection, cursor.getLong(id_column)))
+        finally:
+            cursor.close()
+    if previous and skip:
+        return display_name, True
+
+    values = ContentValues()
+    values.put('_display_name', display_name)
+    values.put('mime_type', 'audio/flac' if local_file.suffix.lower() == '.flac'
+               else 'audio/mpeg')
+    values.put('relative_path', relative_path)
+    values.put('is_pending', Integer(1))
+    uri = resolver.insert(collection, values)
+    if uri is None:
+        raise OSError('无法创建音乐文件')
+    try:
+        descriptor = resolver.openFileDescriptor(uri, 'rwt')
+        if descriptor is None:
+            raise OSError('无法写入音乐文件')
+        fd = os.dup(int(descriptor.getFd()))
+        descriptor.close()
+        with os.fdopen(fd, 'wb') as target, local_file.open('rb') as source:
+            shutil.copyfileobj(source, target, 1024 * 1024)
+        ready = ContentValues()
+        ready.put('is_pending', Integer(0))
+        resolver.update(uri, ready, None, None)
+    except Exception:
+        resolver.delete(uri, None, None)
+        raise
+
+    for old_uri in previous:
+        resolver.delete(old_uri, None, None)
+    return f'Music/NCM Studio/{display_name}', False
 
 
 def collect_ncm(paths) -> list[str]:
@@ -181,6 +274,11 @@ class NCMApp(App):
         Window.clearcolor = BG
         self._cancel = False
         self.files: list[str] = []
+        if IS_ANDROID:
+            self._android_user_data_dir = Path(self.user_data_dir)
+            from android import activity
+            activity.bind(on_activity_result=self._on_picker_result)
+            self._picker_bound = True
 
         root = BoxLayout(orientation='vertical', padding=dp(14), spacing=dp(10))
 
@@ -194,10 +292,22 @@ class NCMApp(App):
         sub.bind(size=lambda *_: setattr(sub, 'text_size', (sub.width, None)))
         root.add_widget(sub)
 
-        self.chooser = FileChooserListView(path=start_dir(), filters=['*.ncm'],
-                                           multiselect=True, size_hint_y=1)
-        self.chooser.bind(selection=self.on_selection)
-        root.add_widget(self.chooser)
+        if IS_ANDROID:
+            choose = Button(text='从设备选择 .ncm 文件', size_hint_y=None, height=dp(48),
+                            background_color=CARD, background_normal='')
+            choose.bind(on_release=self.choose_android_files)
+            root.add_widget(choose)
+            self.selection_label = Label(text='尚未选择文件', font_size='12sp',
+                                         color=MUTED, size_hint_y=None, height=dp(68),
+                                         halign='left', valign='middle')
+            self.selection_label.bind(size=lambda *_: setattr(
+                self.selection_label, 'text_size', (self.selection_label.width, None)))
+            root.add_widget(self.selection_label)
+        else:
+            self.chooser = FileChooserListView(path=start_dir(), filters=['*.ncm'],
+                                               multiselect=True, size_hint_y=1)
+            self.chooser.bind(selection=self.on_selection)
+            root.add_widget(self.chooser)
 
         self.count_label = Label(text='未选择文件', font_size='13sp', color=MUTED,
                                  size_hint_y=None, height=dp(22))
@@ -252,6 +362,104 @@ class NCMApp(App):
         return row
 
     # ---- 选择 ----
+    def choose_android_files(self, *_):
+        try:
+            from jnius import autoclass
+            Intent = autoclass('android.content.Intent')
+            intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
+            intent.addCategory(Intent.CATEGORY_OPENABLE)
+            intent.setType('*/*')
+            intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, True)
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION |
+                            Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+            self._picker_request_code = 9137
+            autoclass('org.kivy.android.PythonActivity').mActivity.startActivityForResult(
+                intent, self._picker_request_code)
+            self.status.text = '请在系统文件选择器中选择 .ncm 文件'
+        except Exception as exc:
+            self.status.text = f'无法打开文件选择器：{exc}'
+
+    def _on_picker_result(self, request_code, result_code, intent):
+        if request_code != getattr(self, '_picker_request_code', None):
+            return
+        try:
+            if result_code != -1 or intent is None:
+                self._post(lambda: setattr(self.status, 'text', '已取消选择'))
+                return
+            from jnius import autoclass
+            PythonActivity = autoclass('org.kivy.android.PythonActivity')
+            resolver = PythonActivity.mActivity.getContentResolver()
+            uris = []
+            clips = intent.getClipData()
+            if clips is not None:
+                for index in range(int(clips.getItemCount())):
+                    uri = clips.getItemAt(index).getUri()
+                    if uri is not None:
+                        uris.append(uri)
+            if not uris:
+                uri = intent.getData()
+                if uri is not None:
+                    uris.append(uri)
+            errors = []
+            opened = []
+            for uri in uris:
+                name = _uri_display_name(resolver, uri)
+                if not name.lower().endswith('.ncm'):
+                    continue
+                safe_name = Path(name).name
+                try:
+                    opened.append((_open_content_uri_fd(resolver, uri), safe_name))
+                except Exception as exc:
+                    errors.append(f'{safe_name}: {exc}')
+            Clock.schedule_once(lambda _dt: self._copy_selected_inputs(
+                opened, errors), 0)
+        except Exception as exc:
+            self._post(lambda e=exc: setattr(
+                self.status, 'text', f'读取所选文件失败：{e}'))
+
+    def _copy_selected_inputs(self, opened, errors):
+        selected = []
+        try:
+            import_dir = self._android_user_data_dir / 'selected-inputs'
+            import_dir.mkdir(parents=True, exist_ok=True)
+            for fd, name in opened:
+                destination = import_dir / f'{uuid4().hex}_{name}'
+                try:
+                    with os.fdopen(fd, 'rb') as source, destination.open('wb') as target:
+                        shutil.copyfileobj(source, target, 1024 * 1024)
+                    selected.append(str(destination))
+                except Exception as exc:
+                    destination.unlink(missing_ok=True)
+                    errors.append(f'{name}: {exc}')
+            selected_paths = {Path(path) for path in selected}
+            for old_path in import_dir.iterdir():
+                if old_path.is_file() and old_path not in selected_paths:
+                    old_path.unlink(missing_ok=True)
+            if errors:
+                status = f'有 {len(errors)} 个文件无法读取：{errors[0]}'
+            else:
+                status = '选择完成' if selected else '请选择 .ncm 文件'
+            self._post(lambda: self._show_android_selection(selected, status))
+        except Exception as exc:
+            for fd, _ in opened:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+            self._post(lambda e=exc: setattr(
+                self.status, 'text', f'复制所选文件失败：{e}'))
+
+    def _show_android_selection(self, selected, status):
+        self.files = selected
+        self.count_label.text = (f'已选择 {len(selected)} 个文件' if selected
+                                 else '未选择 .ncm 文件')
+        self.selection_label.text = '\n'.join(
+            Path(path).name.split('_', 1)[-1] for path in selected[:3])
+        if len(selected) > 3:
+            self.selection_label.text += f'\n另有 {len(selected) - 3} 个文件'
+        self.status.text = status
+        Window.canvas.ask_update()
+
     def on_selection(self, _chooser, selection):
         self.files = collect_ncm(selection)
         self.count_label.text = f'已选择 {len(self.files)} 个文件' if self.files else '未选择文件'
@@ -275,12 +483,17 @@ class NCMApp(App):
         self.log_label.text = ''
         self.status.text = f'准备转换 {len(self.files)} 个文件…'
 
-        out = output_root()
-        try:
-            out.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            out = None
         files = list(self.files)
+        if IS_ANDROID and _android_sdk() >= 29:
+            private_dir = Path(self.user_data_dir)
+            private_dir.mkdir(parents=True, exist_ok=True)
+            out = Path(tempfile.mkdtemp(prefix='ncmstudio-output-', dir=private_dir))
+        else:
+            out = output_root()
+            try:
+                out.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                out = None
         Thread(target=self._work, args=(files, out), daemon=True).start()
 
     def _post(self, fn):
@@ -291,6 +504,9 @@ class NCMApp(App):
             Clock.schedule_once(lambda dt: fn(), 0)
 
     def _work(self, files, out):
+        if IS_ANDROID and _android_sdk() >= 29:
+            self._work_scoped_android(files, out)
+            return
         ok, skipped, failed = convert_batch(
             files,
             out_dir=out,
@@ -300,6 +516,41 @@ class NCMApp(App):
             on_file_done=lambda i, s, d: self._post(lambda: self._file_done(i, s, d)),
             should_cancel=lambda: self._cancel,
         )
+        self._post(lambda: self._finished(ok, skipped, failed))
+
+    def _work_scoped_android(self, files, out):
+        ok = skipped = failed = 0
+        for idx, path in enumerate(files):
+            if self._cancel:
+                self._post(lambda i=idx: self._file_done(i, '已取消', ''))
+                continue
+            try:
+                item_dir = Path(out) / str(idx)
+                item_dir.mkdir(parents=True, exist_ok=True)
+                output = dump(
+                    path, out_dir=item_dir, use_title=self.opt_title.active,
+                    skip=False,
+                    progress=lambda done, total, i=idx: self._post(
+                        lambda: self._progress(i, done, total)))
+                if output is None:
+                    skipped += 1
+                    self._post(lambda i=idx: self._file_done(i, '已跳过', ''))
+                    continue
+                name, existed = _publish_media_store(Path(output), self.opt_skip.active)
+                if existed:
+                    skipped += 1
+                    self._post(lambda i=idx: self._file_done(i, '已跳过', '目标已存在'))
+                else:
+                    ok += 1
+                    self._post(lambda i=idx, n=name: self._file_done(i, '完成', n))
+            except Exception as exc:
+                if self._cancel:
+                    self._post(lambda i=idx: self._file_done(i, '已取消', ''))
+                else:
+                    failed += 1
+                    self._post(lambda i=idx, e=exc: self._file_done(
+                        i, '失败', f'{type(e).__name__}: {e}'))
+        shutil.rmtree(out, ignore_errors=True)
         self._post(lambda: self._finished(ok, skipped, failed))
 
     def _progress(self, idx, done, total):
